@@ -76,6 +76,10 @@ export const login = async (req: Request, res: Response) => {
   try {
     const { identifier, password } = req.body;
     if (!identifier || !password) {
+      // Increment failed attempt on missing credentials
+      if ((res as any).incrementLoginAttempt) {
+        await (res as any).incrementLoginAttempt();
+      }
       return res.status(400).json({
         success: false,
         message: 'Missing credentials',
@@ -92,6 +96,10 @@ export const login = async (req: Request, res: Response) => {
     });
     
     if (!user) {
+      // Increment failed attempt on invalid user
+      if ((res as any).incrementLoginAttempt) {
+        await (res as any).incrementLoginAttempt();
+      }
       return res.status(401).json({
         success: false,
         message: 'Authentication failed',
@@ -102,11 +110,20 @@ export const login = async (req: Request, res: Response) => {
     const isPasswordValid = await bcrypt.compare(password, user.password);
     
     if (!isPasswordValid) {
+      // Increment failed attempt on invalid password
+      if ((res as any).incrementLoginAttempt) {
+        await (res as any).incrementLoginAttempt();
+      }
       return res.status(401).json({
         success: false,
         message: 'Authentication failed',
         error: 'Invalid credentials'
       });
+    }
+    
+    // Clear failed attempts on successful login
+    if ((res as any).clearLoginAttempts) {
+      await (res as any).clearLoginAttempts();
     }
     
     const sessionId = generateSessionId();
