@@ -17,9 +17,6 @@ import { startAnalyticsFlushWorker } from './workers/analyticsFlushWorker';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Trust proxy - required for accurate IP detection in rate limiter
-// Set to 1 for single proxy (e.g., nginx, load balancer)
-app.set('trust proxy', 1);
 
 app.use(cors());
 app.use(express.json());

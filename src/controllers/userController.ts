@@ -77,8 +77,8 @@ export const login = async (req: Request, res: Response) => {
     const { identifier, password } = req.body;
     if (!identifier || !password) {
       // Increment failed attempt on missing credentials
-      if ((res as any).incrementLoginAttempt) {
-        await (res as any).incrementLoginAttempt();
+      if ((res as any).incrementEmailAttempt) {
+        await (res as any).incrementEmailAttempt();
       }
       return res.status(400).json({
         success: false,
@@ -97,8 +97,8 @@ export const login = async (req: Request, res: Response) => {
     
     if (!user) {
       // Increment failed attempt on invalid user
-      if ((res as any).incrementLoginAttempt) {
-        await (res as any).incrementLoginAttempt();
+      if ((res as any).incrementEmailAttempt) {
+        await (res as any).incrementEmailAttempt();
       }
       return res.status(401).json({
         success: false,
@@ -111,8 +111,8 @@ export const login = async (req: Request, res: Response) => {
     
     if (!isPasswordValid) {
       // Increment failed attempt on invalid password
-      if ((res as any).incrementLoginAttempt) {
-        await (res as any).incrementLoginAttempt();
+      if ((res as any).incrementEmailAttempt) {
+        await (res as any).incrementEmailAttempt();
       }
       return res.status(401).json({
         success: false,
@@ -122,8 +122,8 @@ export const login = async (req: Request, res: Response) => {
     }
     
     // Clear failed attempts on successful login
-    if ((res as any).clearLoginAttempts) {
-      await (res as any).clearLoginAttempts();
+    if ((res as any).clearEmailAttempts) {
+      await (res as any).clearEmailAttempts();
     }
     
     const sessionId = generateSessionId();
