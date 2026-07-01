@@ -2,9 +2,11 @@ import { Request, Response } from 'express';
 import { AuthProvider } from '@prisma/client';
 import prisma from '../utils/prisma';
 import { verifyGoogleIdToken } from '../services/googleAuthService';
-import { hashIdentifierForLog } from '../utils/loginIdentifier';
+import { hashIdentifierForLog, normalizeEmail, isEmailIdentifier } from '../utils/loginIdentifier';
 import { generateToken, generateSessionId } from '../utils/jwt';
 import { ApiResponse } from '../types';
+import bcrypt from 'bcrypt';
+import { googleAccountLinked, hasPasswordLogin } from '../utils/authHelpers';
 
 const USERNAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_-]{3,15}$/;
 
@@ -130,14 +132,27 @@ export const googleLogin = async (req: Request, res: Response) => {
 
       if (userByEmail) {
         if (
-          userByEmail.authProvider === AuthProvider.LOCAL &&
-          userByEmail.password &&
-          !userByEmail.googleId
+          hasPasswordLogin(userByEmail) &&
+          !googleAccountLinked(userByEmail)
         ) {
           return res.status(409).json({
             success: false,
             message: 'Account already exists',
-            error: 'An account with this email already exists. Please log in with your password.',
+            error:
+              'An account with this email already exists. Please log in with your password, then link your Google account.',
+            usePasswordLogin: true,
+            canLink: true,
+          });
+        }
+
+        if (
+          googleAccountLinked(userByEmail) &&
+          userByEmail.googleId !== profile.googleId
+        ) {
+          return res.status(409).json({
+            success: false,
+            message: 'Account conflict',
+            error: 'This email is linked to a different Google account.',
           });
         }
 
@@ -145,7 +160,9 @@ export const googleLogin = async (req: Request, res: Response) => {
           where: { id: userByEmail.id },
           data: {
             googleId: profile.googleId,
-            authProvider: AuthProvider.GOOGLE,
+            authProvider: hasPasswordLogin(userByEmail)
+              ? AuthProvider.LOCAL
+              : AuthProvider.GOOGLE,
             emailVerified: true,
             displayName: userByEmail.displayName ?? profile.name,
             avatarUrl: userByEmail.avatarUrl ?? profile.picture,
@@ -201,6 +218,150 @@ export const googleLogin = async (req: Request, res: Response) => {
       success: false,
       message: 'Internal server error',
       error: 'Failed to authenticate with Google',
+    });
+  }
+};
+
+export const linkGoogleAccount = async (req: Request, res: Response) => {
+  try {
+    const { idToken, identifier, password } = req.body;
+
+    if (!idToken || typeof idToken !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'ID token is required',
+        error: 'Missing or invalid idToken in request body',
+      });
+    }
+
+    if (!identifier || typeof identifier !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Identifier is required',
+        error: 'Username or email must be provided',
+      });
+    }
+
+    if (!password || typeof password !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Password is required',
+        error: 'Password must be provided to link a Google account',
+      });
+    }
+
+    const profile = await verifyGoogleIdToken(idToken);
+
+    if (!profile.emailVerified) {
+      return res.status(403).json({
+        success: false,
+        message: 'Email not verified',
+        error: 'Your Google account email must be verified',
+      });
+    }
+
+    const normalizedIdentifier = isEmailIdentifier(identifier)
+      ? normalizeEmail(identifier)
+      : identifier;
+
+    const user = await prisma.user.findUnique({
+      where: isEmailIdentifier(identifier)
+        ? { email: normalizedIdentifier }
+        : { username: normalizedIdentifier },
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication failed',
+        error: 'Invalid credentials',
+      });
+    }
+
+    if (!hasPasswordLogin(user)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Linking not available',
+        error: 'This account does not use password login.',
+        useGoogleLogin: true,
+      });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password!);
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication failed',
+        error: 'Invalid credentials',
+      });
+    }
+
+    if (normalizeEmail(user.email) !== profile.email) {
+      return res.status(403).json({
+        success: false,
+        message: 'Email mismatch',
+        error: 'Google account email does not match this BrowsePing account.',
+      });
+    }
+
+    if (googleAccountLinked(user)) {
+      if (user.googleId === profile.googleId) {
+        return res.status(200).json({
+          success: true,
+          message: 'Google account already linked',
+          data: { linked: true },
+        });
+      }
+
+      return res.status(409).json({
+        success: false,
+        message: 'Account already linked',
+        error: 'This account is already linked to a different Google account.',
+      });
+    }
+
+    const existingGoogleUser = await prisma.user.findUnique({
+      where: { googleId: profile.googleId },
+    });
+
+    if (existingGoogleUser && existingGoogleUser.id !== user.id) {
+      return res.status(409).json({
+        success: false,
+        message: 'Google account in use',
+        error: 'This Google account is already linked to another BrowsePing user.',
+      });
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        googleId: profile.googleId,
+        authProvider: AuthProvider.LOCAL,
+        emailVerified: true,
+        avatarUrl: user.avatarUrl ?? profile.picture,
+        displayName: user.displayName ?? profile.name,
+      },
+    });
+
+    console.log(
+      `[Google Auth] Account linked: googleId=${hashIdentifierForLog(profile.googleId)} userId=${hashIdentifierForLog(user.id)}`
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Google account linked successfully',
+      data: {
+        linked: true,
+        email: user.email,
+      },
+    });
+  } catch (error) {
+    console.error('[Google Auth] Account linking failed:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: 'Failed to link Google account',
     });
   }
 };
